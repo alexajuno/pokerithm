@@ -210,6 +210,18 @@ def interactive(
     console.print("[dim]Type 'quit' to exit[/dim]\n")
 
     try:
+        # Get number of players first
+        if players == 2:
+            player_count_input = Prompt.ask(
+                "[bold]Number of players[/bold]",
+                default="2",
+            )
+            if player_count_input.lower() == "quit":
+                return
+            players = int(player_count_input)
+        opponents = players - 1
+        console.print(f"  → {players} player(s) ({opponents} opponent(s))\n")
+
         # Get hero's cards
         hero_input = Prompt.ask("[bold]Your hole cards[/bold]")
         if hero_input.lower() == "quit":
@@ -217,22 +229,22 @@ def interactive(
         hero_cards = parse_cards(hero_input)
         console.print(f"  → {format_cards(hero_cards)}\n")
 
-        # Get number of players if not specified via flag
-        if players == 2:
-            player_count_input = Prompt.ask(
-                "[bold]Number of players[/bold]",
-                default="2",
-            )
-            players = int(player_count_input)
-        opponents = players - 1
-        console.print(f"  → {players} player(s) ({opponents} opponent(s))\n")
-
 
         # Track through streets
         community: list[Card] = []
-        streets = [("Preflop", 0), ("Flop", 3), ("Turn", 1), ("River", 1)]
+        streets = [("Preflop", 0), ("Flop", 3), ("Turn", 1), ("River", 1), ("Showdown", 0)]
 
         for street_name, cards_needed in streets:
+            # Deal cards first (if any)
+            if cards_needed > 0:
+                prompt = f"[bold]{street_name} cards ({cards_needed})[/bold]"
+                street_input = Prompt.ask(prompt)
+                if street_input.lower() == "quit":
+                    return
+                new_cards = parse_cards(street_input)
+                community.extend(new_cards)
+                console.print(f"  → {format_cards(new_cards)}\n")
+
             # Calculate current equity
             result = calculate_equity(
                 hero_cards=hero_cards,
@@ -250,20 +262,27 @@ def interactive(
                 f"[yellow]{result.tie_rate * 100:.1f}%[/yellow] tie\n"
             )
 
+            # At showdown, show final hand and end
             if len(community) >= 5:
-                # Show final hand
                 final = Hand(cards=hero_cards + community)
                 console.print(f"[bold]Your hand: {final.value.rank}[/bold]\n")
                 break
 
-            if cards_needed > 0:
-                prompt = f"[bold]{street_name} cards ({cards_needed})[/bold]"
-                street_input = Prompt.ask(prompt)
-                if street_input.lower() == "quit":
+            # Betting round - ask about folds
+            if opponents > 0:
+                fold_input = Prompt.ask(
+                    "[bold]Players folded[/bold]",
+                    default="0",
+                )
+                if fold_input.lower() == "quit":
                     return
-                new_cards = parse_cards(street_input)
-                community.extend(new_cards)
-                console.print(f"  → {format_cards(new_cards)}\n")
+                folded = int(fold_input)
+                if folded > 0:
+                    opponents = max(0, opponents - folded)
+                    if opponents == 0:
+                        console.print("\n[bold green]All opponents folded - you win![/bold green]\n")
+                        break
+                    console.print(f"  → {opponents} opponent(s) remaining\n")
 
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
