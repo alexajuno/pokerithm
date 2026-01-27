@@ -1,6 +1,5 @@
 """Poker odds and equity calculator using Monte Carlo simulation."""
 
-import random
 from dataclasses import dataclass
 from typing import Sequence
 

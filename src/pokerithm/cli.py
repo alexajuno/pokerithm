@@ -8,6 +8,7 @@ from rich.prompt import Prompt
 
 from .card import Card, card, Suit
 from .calculator import calculate_equity, calculate_outs, preflop_equity
+from .config import get_config
 from .hand import Hand, HandRank
 
 app = typer.Typer(help="Poker odds calculator for Texas Hold'em")
@@ -37,12 +38,16 @@ def parse_cards(s: str) -> list[Card]:
 @app.command()
 def equity(
     hero: str = typer.Argument(..., help="Your hole cards (e.g., 'As Kh')"),
-    villain: str = typer.Option(None, "--vs", "-v", help="Opponent's cards (optional)"),
-    board: str = typer.Option(None, "--board", "-b", help="Community cards"),
-    opponents: int = typer.Option(1, "--opponents", "-o", help="Number of opponents"),
-    sims: int = typer.Option(10000, "--sims", "-n", help="Number of simulations"),
+    villain: str | None = typer.Option(None, "--vs", "-v", help="Opponent's cards (optional)"),
+    board: str | None = typer.Option(None, "--board", "-b", help="Community cards"),
+    players: int = typer.Option(2, "--players", "-p", help="Number of players"),
+    sims: int | None = typer.Option(None, "--sims", "-n", help="Number of simulations"),
 ):
     """Calculate win equity against opponent(s)."""
+    config = get_config()
+    if sims is None:
+        sims = config.simulation.default_simulations
+    opponents = players - 1
     try:
         hero_cards = parse_cards(hero)
         villain_cards = parse_cards(villain) if villain else None
@@ -175,9 +180,12 @@ def outs(
 def preflop(
     hero: str = typer.Argument(..., help="Your hole cards (e.g., 'As Ah')"),
     opponents: int = typer.Option(1, "--opponents", "-o", help="Number of opponents"),
-    sims: int = typer.Option(10000, "--sims", "-n", help="Number of simulations"),
+    sims: int | None = typer.Option(None, "--sims", "-n", help="Number of simulations"),
 ):
     """Calculate preflop equity against random opponents."""
+    config = get_config()
+    if sims is None:
+        sims = config.simulation.default_simulations
     try:
         hero_cards = parse_cards(hero)
 
@@ -204,6 +212,7 @@ def interactive(
     players: int = typer.Option(2, "--players", "-p", help="Number of players"),
 ):
     """Interactive mode - track a hand as it progresses."""
+    config = get_config()
     console.print(Panel("[bold]Poker Calculator - Interactive Mode[/bold]"))
     console.print("Enter your cards and track equity as the hand develops.\n")
     console.print("[dim]Card format: As Kh Td 9c 2s (rank + suit)[/dim]")
@@ -251,7 +260,7 @@ def interactive(
                 villain_cards=None,
                 community=community if community else None,
                 num_opponents=opponents,
-                num_simulations=5000,
+                num_simulations=config.simulation.interactive_simulations,
             )
 
             console.print(f"[bold cyan]── {street_name} ──[/bold cyan]")
