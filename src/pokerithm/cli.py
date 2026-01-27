@@ -39,9 +39,10 @@ def equity(
     hero: str = typer.Argument(..., help="Your hole cards (e.g., 'As Kh')"),
     villain: str = typer.Option(None, "--vs", "-v", help="Opponent's cards (optional)"),
     board: str = typer.Option(None, "--board", "-b", help="Community cards"),
+    opponents: int = typer.Option(1, "--opponents", "-o", help="Number of opponents"),
     sims: int = typer.Option(10000, "--sims", "-n", help="Number of simulations"),
 ):
-    """Calculate win equity against an opponent."""
+    """Calculate win equity against opponent(s)."""
     try:
         hero_cards = parse_cards(hero)
         villain_cards = parse_cards(villain) if villain else None
@@ -49,9 +50,12 @@ def equity(
 
         console.print(f"\n[bold]Your hand:[/bold] {format_cards(hero_cards)}")
         if villain_cards:
-            console.print(f"[bold]Opponent:[/bold]  {format_cards(villain_cards)}")
+            if opponents > 1:
+                console.print(f"[bold]Opponents:[/bold] {format_cards(villain_cards)} + {opponents - 1} random")
+            else:
+                console.print(f"[bold]Opponent:[/bold]  {format_cards(villain_cards)}")
         else:
-            console.print("[bold]Opponent:[/bold]  [dim]Random[/dim]")
+            console.print(f"[bold]Opponents:[/bold] {opponents} random")
         if community:
             console.print(f"[bold]Board:[/bold]     {format_cards(community)}")
 
@@ -61,6 +65,7 @@ def equity(
             hero_cards=hero_cards,
             villain_cards=villain_cards,
             community=community,
+            num_opponents=opponents,
             num_simulations=sims,
         )
 
@@ -195,7 +200,9 @@ def preflop(
 
 
 @app.command()
-def interactive():
+def interactive(
+    players: int = typer.Option(2, "--players", "-p", help="Number of players"),
+):
     """Interactive mode - track a hand as it progresses."""
     console.print(Panel("[bold]Poker Calculator - Interactive Mode[/bold]"))
     console.print("Enter your cards and track equity as the hand develops.\n")
@@ -210,14 +217,16 @@ def interactive():
         hero_cards = parse_cards(hero_input)
         console.print(f"  → {format_cards(hero_cards)}\n")
 
-        # Get opponent's cards (optional)
-        villain_input = Prompt.ask(
-            "[bold]Opponent's cards[/bold] [dim](Enter to skip)[/dim]",
-            default="",
-        )
-        villain_cards = parse_cards(villain_input) if villain_input else None
-        if villain_cards:
-            console.print(f"  → {format_cards(villain_cards)}\n")
+        # Get number of players if not specified via flag
+        if players == 2:
+            player_count_input = Prompt.ask(
+                "[bold]Number of players[/bold]",
+                default="2",
+            )
+            players = int(player_count_input)
+        opponents = players - 1
+        console.print(f"  → {players} player(s) ({opponents} opponent(s))\n")
+
 
         # Track through streets
         community: list[Card] = []
@@ -227,8 +236,9 @@ def interactive():
             # Calculate current equity
             result = calculate_equity(
                 hero_cards=hero_cards,
-                villain_cards=villain_cards,
+                villain_cards=None,
                 community=community if community else None,
+                num_opponents=opponents,
                 num_simulations=5000,
             )
 

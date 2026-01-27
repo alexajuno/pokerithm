@@ -46,14 +46,17 @@ def calculate_equity(
     hero_cards: Sequence[Card],
     villain_cards: Sequence[Card] | None = None,
     community: Sequence[Card] | None = None,
+    num_opponents: int = 1,
     num_simulations: int = 10000,
 ) -> EquityResult:
     """Calculate win probability using Monte Carlo simulation.
 
     Args:
         hero_cards: Your hole cards (2 cards)
-        villain_cards: Opponent's hole cards (2 cards), or None for random
+        villain_cards: One opponent's known hole cards (2 cards), or None for random
         community: Known community cards (0-5), or None for none
+        num_opponents: Number of opponents (default 1). If villain_cards is provided,
+                       that counts as 1 known opponent; remaining are random.
         num_simulations: Number of random simulations to run
 
     Returns:
@@ -69,6 +72,8 @@ def calculate_equity(
         raise ValueError("Villain must have exactly 2 hole cards")
     if len(community) > 5:
         raise ValueError("Community can have at most 5 cards")
+    if num_opponents < 1:
+        raise ValueError("Must have at least 1 opponent")
 
     wins = 0
     ties = 0
@@ -78,32 +83,41 @@ def calculate_equity(
     # Cards that are already known
     known_cards = set(hero_cards + (villain_cards or []) + community)
 
+    # How many random opponents to deal
+    random_opponents = num_opponents if villain_cards is None else num_opponents - 1
+
     for _ in range(num_simulations):
         # Create deck without known cards
         deck = Deck()
         deck.cards = [c for c in deck.cards if c not in known_cards]
         deck.shuffle()
 
-        # Deal villain cards if not known
-        sim_villain = villain_cards if villain_cards else deck.deal(2)
+        # Build list of opponent hands
+        opponent_hands: list[list[Card]] = []
+        if villain_cards:
+            opponent_hands.append(list(villain_cards))
+        for _ in range(random_opponents):
+            opponent_hands.append(deck.deal(2))
 
         # Complete community cards
         cards_needed = 5 - len(community)
         sim_community = community + deck.deal(cards_needed)
 
-        # Evaluate hands
+        # Evaluate hero hand
         hero_hand = Hand(cards=hero_cards + sim_community)
-        villain_hand = Hand(cards=sim_villain + sim_community)
-
         hero_value = hero_hand.value
-        villain_value = villain_hand.value
-
         hand_counts[hero_value.rank] += 1
 
-        # Compare
-        if hero_value > villain_value:
+        # Evaluate all opponent hands
+        opponent_values = [
+            Hand(cards=opp + sim_community).value for opp in opponent_hands
+        ]
+        best_opponent = max(opponent_values)
+
+        # Compare against best opponent
+        if hero_value > best_opponent:
             wins += 1
-        elif hero_value < villain_value:
+        elif hero_value < best_opponent:
             losses += 1
         else:
             ties += 1
