@@ -207,6 +207,77 @@ def preflop(
         raise typer.Exit(1)
 
 
+def _get_position_name(utg_distance: int, total_players: int) -> str:
+    """Get position name based on distance from UTG.
+
+    Preflop order: UTG(0) -> UTG+1(1) -> ... -> CO -> BTN -> SB -> BB
+    """
+    # Late positions (from the end)
+    if utg_distance == total_players - 1:
+        return "Big Blind (BB)"
+    if utg_distance == total_players - 2:
+        return "Small Blind (SB)"
+    if utg_distance == total_players - 3:
+        return "Button (BTN)"
+    if utg_distance == total_players - 4:
+        return "Cutoff (CO)"
+    if utg_distance == total_players - 5:
+        return "Hijack (HJ)"
+    # Early positions (from the start)
+    if utg_distance == 0:
+        return "Under the Gun (UTG)"
+    if utg_distance == 1:
+        return "UTG+1"
+    return "Middle Position (MP)"
+
+
+def _prompt_int(
+    prompt_text: str,
+    default: str | None = None,
+    min_val: int = 0,
+    max_val: int | None = None,
+) -> int | None:
+    """Prompt for an integer with validation. Returns None if user quits."""
+    while True:
+        if default:
+            response = Prompt.ask(prompt_text, default=default)
+        else:
+            response = Prompt.ask(prompt_text)
+
+        if response.lower() == "quit":
+            return None
+
+        try:
+            value = int(response)
+            if value < min_val:
+                console.print(f"[red]Must be at least {min_val}[/red]")
+                continue
+            if max_val is not None and value > max_val:
+                console.print(f"[red]Must be at most {max_val}[/red]")
+                continue
+            return value
+        except ValueError:
+            console.print("[red]Please enter a valid number[/red]")
+
+
+def _prompt_cards(prompt_text: str, expected_count: int | None = None) -> list[Card] | None:
+    """Prompt for cards with validation. Returns None if user quits."""
+    while True:
+        response = Prompt.ask(prompt_text)
+
+        if response.lower() == "quit":
+            return None
+
+        try:
+            cards = parse_cards(response)
+            if expected_count is not None and len(cards) != expected_count:
+                console.print(f"[red]Expected {expected_count} card(s), got {len(cards)}[/red]")
+                continue
+            return cards
+        except ValueError as e:
+            console.print(f"[red]Invalid card: {e}[/red]")
+
+
 @app.command()
 def interactive(
     players: int = typer.Option(2, "--players", "-p", help="Number of players"),
@@ -219,43 +290,85 @@ def interactive(
     console.print("[dim]Type 'quit' to exit[/dim]\n")
 
     try:
-        # Get number of players first
+        # Get number of players
         if players == 2:
-            player_count_input = Prompt.ask(
-                "[bold]Number of players[/bold]",
-                default="2",
+            result = _prompt_int(
+                "[bold]Number of players[/bold]", default="2", min_val=2, max_val=10
             )
-            if player_count_input.lower() == "quit":
+            if result is None:
                 return
-            players = int(player_count_input)
+            players = result
         opponents = players - 1
-        console.print(f"  → {players} player(s) ({opponents} opponent(s))\n")
+        console.print(f"  → {players} players\n")
+
+        # Get position (distance from UTG, who acts first preflop)
+        result = _prompt_int(
+            "[bold]Position from UTG[/bold] (0=UTG, acts first)",
+            default="0",
+            min_val=0,
+            max_val=players - 1,
+        )
+        if result is None:
+            return
+        utg_distance = result
+        position_name = _get_position_name(utg_distance, players)
+        console.print(f"  → Position: {position_name}\n")
 
         # Get hero's cards
-        hero_input = Prompt.ask("[bold]Your hole cards[/bold]")
-        if hero_input.lower() == "quit":
+        hero_cards = _prompt_cards("[bold]Your hole cards[/bold]", expected_count=2)
+        if hero_cards is None:
             return
-        hero_cards = parse_cards(hero_input)
         console.print(f"  → {format_cards(hero_cards)}\n")
-
 
         # Track through streets
         community: list[Card] = []
-        streets = [("Preflop", 0), ("Flop", 3), ("Turn", 1), ("River", 1), ("Showdown", 0)]
+        streets = [("Preflop", 0), ("Flop", 3), ("Turn", 1), ("River", 1)]
 
-        for street_name, cards_needed in streets:
-            # Deal cards first (if any)
-            if cards_needed > 0:
-                prompt = f"[bold]{street_name} cards ({cards_needed})[/bold]"
-                street_input = Prompt.ask(prompt)
-                if street_input.lower() == "quit":
+        for street_idx, (street_name, cards_needed) in enumerate(streets):
+            console.print(f"[bold cyan]── {street_name} ──[/bold cyan]")
+
+            # Show position on preflop
+            if street_idx == 0:
+                console.print(f"Position: {position_name}")
+
+            # Ask about folds FIRST (before calculating)
+            # Preflop: utg_distance = number of players who act before you
+            # Postflop: any remaining opponent could fold
+            if street_idx == 0:
+                max_folds = min(utg_distance, opponents)
+            else:
+                max_folds = opponents
+
+            if max_folds > 0 and opponents > 1:
+                folded = _prompt_int(
+                    f"[bold]Players folded[/bold] (0-{max_folds})",
+                    default="0",
+                    min_val=0,
+                    max_val=max_folds,
+                )
+                if folded is None:
                     return
-                new_cards = parse_cards(street_input)
-                community.extend(new_cards)
-                console.print(f"  → {format_cards(new_cards)}\n")
+                if folded > 0:
+                    opponents -= folded
+                    if opponents == 0:
+                        console.print(
+                            "\n[bold green]All opponents folded - you win![/bold green]\n"
+                        )
+                        return
+                    console.print(f"  → {opponents} remaining")
 
-            # Calculate current equity
-            result = calculate_equity(
+            # Deal community cards (if any)
+            if cards_needed > 0:
+                new_cards = _prompt_cards(
+                    f"[bold]{street_name} cards[/bold]", expected_count=cards_needed
+                )
+                if new_cards is None:
+                    return
+                community.extend(new_cards)
+                console.print(f"  → Board: {format_cards(community)}")
+
+            # Calculate equity with current opponent count
+            equity_result = calculate_equity(
                 hero_cards=hero_cards,
                 villain_cards=None,
                 community=community if community else None,
@@ -263,35 +376,15 @@ def interactive(
                 num_simulations=config.simulation.interactive_simulations,
             )
 
-            console.print(f"[bold cyan]── {street_name} ──[/bold cyan]")
-            if community:
-                console.print(f"Board: {format_cards(community)}")
             console.print(
-                f"Equity: [green]{result.win_percent:.1f}%[/green] win, "
-                f"[yellow]{result.tie_rate * 100:.1f}%[/yellow] tie\n"
+                f"Equity vs {opponents}: [green]{equity_result.win_percent:.1f}%[/green] win, "
+                f"[yellow]{equity_result.tie_rate * 100:.1f}%[/yellow] tie\n"
             )
 
-            # At showdown, show final hand and end
+            # At river, show final hand
             if len(community) >= 5:
                 final = Hand(cards=hero_cards + community)
                 console.print(f"[bold]Your hand: {final.value.rank}[/bold]\n")
-                break
-
-            # Betting round - ask about folds
-            if opponents > 0:
-                fold_input = Prompt.ask(
-                    "[bold]Players folded[/bold]",
-                    default="0",
-                )
-                if fold_input.lower() == "quit":
-                    return
-                folded = int(fold_input)
-                if folded > 0:
-                    opponents = max(0, opponents - folded)
-                    if opponents == 0:
-                        console.print("\n[bold green]All opponents folded - you win![/bold green]\n")
-                        break
-                    console.print(f"  → {opponents} opponent(s) remaining\n")
 
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
