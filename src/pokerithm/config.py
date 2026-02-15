@@ -15,10 +15,21 @@ class SimulationConfig:
 
 
 @dataclass
+class BotStrategyConfig:
+    """Configuration for the bot's play-style."""
+
+    aggression: float = 0.6
+    bluff_frequency: float = 0.15
+    tightness: float = 0.5
+    raise_sizing: float = 2.5
+
+
+@dataclass
 class Config:
     """Application configuration."""
 
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
+    bot: BotStrategyConfig = field(default_factory=BotStrategyConfig)
 
     @classmethod
     def load(cls) -> Self:
@@ -48,7 +59,15 @@ class Config:
             interactive_simulations=sim_data.get("interactive_simulations", 5000),
         )
 
-        return cls(simulation=simulation)
+        bot_data = data.get("bot", {})
+        bot = BotStrategyConfig(
+            aggression=bot_data.get("aggression", 0.6),
+            bluff_frequency=bot_data.get("bluff_frequency", 0.15),
+            tightness=bot_data.get("tightness", 0.5),
+            raise_sizing=bot_data.get("raise_sizing", 2.5),
+        )
+
+        return cls(simulation=simulation, bot=bot)
 
 
 # Global config instance (loaded lazily)

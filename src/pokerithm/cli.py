@@ -6,10 +6,13 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.prompt import Prompt
 
+from .action import ActionType, BotDecision
+from .bot import Bot, BotConfig, GameState
 from .card import Card, card, Suit
 from .calculator import calculate_equity, calculate_outs, preflop_equity
 from .config import get_config
 from .hand import Hand, HandRank
+from .position import Position, position_from_utg_distance
 
 app = typer.Typer(help="Poker odds calculator for Texas Hold'em")
 console = Console()
@@ -207,30 +210,6 @@ def preflop(
         raise typer.Exit(1)
 
 
-def _get_position_name(utg_distance: int, total_players: int) -> str:
-    """Get position name based on distance from UTG.
-
-    Preflop order: UTG(0) -> UTG+1(1) -> ... -> CO -> BTN -> SB -> BB
-    """
-    # Late positions (from the end)
-    if utg_distance == total_players - 1:
-        return "Big Blind (BB)"
-    if utg_distance == total_players - 2:
-        return "Small Blind (SB)"
-    if utg_distance == total_players - 3:
-        return "Button (BTN)"
-    if utg_distance == total_players - 4:
-        return "Cutoff (CO)"
-    if utg_distance == total_players - 5:
-        return "Hijack (HJ)"
-    # Early positions (from the start)
-    if utg_distance == 0:
-        return "Under the Gun (UTG)"
-    if utg_distance == 1:
-        return "UTG+1"
-    return "Middle Position (MP)"
-
-
 def _prompt_int(
     prompt_text: str,
     default: str | None = None,
@@ -278,9 +257,62 @@ def _prompt_cards(prompt_text: str, expected_count: int | None = None) -> list[C
             console.print(f"[red]Invalid card: {e}[/red]")
 
 
+def _prompt_float(
+    prompt_text: str,
+    default: str | None = None,
+    min_val: float = 0.0,
+) -> float | None:
+    """Prompt for a float with validation. Returns None if user quits."""
+    while True:
+        if default:
+            response = Prompt.ask(prompt_text, default=default)
+        else:
+            response = Prompt.ask(prompt_text)
+
+        if response.lower() == "quit":
+            return None
+
+        try:
+            value = float(response)
+            if value < min_val:
+                console.print(f"[red]Must be at least {min_val}[/red]")
+                continue
+            return value
+        except ValueError:
+            console.print("[red]Please enter a valid number[/red]")
+
+
+def _display_bot_decision(decision: BotDecision) -> None:
+    """Display a bot recommendation with Rich formatting."""
+    action = decision.action
+    color = {
+        ActionType.FOLD: "red",
+        ActionType.CHECK: "yellow",
+        ActionType.CALL: "yellow",
+        ActionType.RAISE: "green",
+        ActionType.ALL_IN: "bold green",
+    }.get(action.type, "white")
+
+    # Confidence bar
+    filled = int(decision.confidence * 10)
+    bar = "[green]" + "█" * filled + "[/green][dim]" + "░" * (10 - filled) + "[/dim]"
+
+    console.print(
+        Panel(
+            f"[{color}]{action}[/{color}]\n"
+            f"[dim]{decision.reasoning}[/dim]\n"
+            + (f"Equity: {decision.equity:.0f}%  " if decision.equity is not None else "")
+            + f"Confidence: {bar}",
+            title="[bold magenta]Bot Advice[/bold magenta]",
+            expand=False,
+        )
+    )
+
+
 @app.command()
 def interactive(
     players: int = typer.Option(2, "--players", "-p", help="Number of players"),
+    bot_mode: bool = typer.Option(False, "--bot", help="Enable bot advisor"),
 ):
     """Interactive mode - track a hand as it progresses."""
     config = get_config()
@@ -311,7 +343,8 @@ def interactive(
         if result is None:
             return
         utg_distance = result
-        position_name = _get_position_name(utg_distance, players)
+        position = position_from_utg_distance(utg_distance, players)
+        position_name = position.label
         console.print(f"  → Position: {position_name}\n")
 
         # Get hero's cards
@@ -381,6 +414,39 @@ def interactive(
                 f"[yellow]{equity_result.tie_rate * 100:.1f}%[/yellow] tie\n"
             )
 
+            # Bot advice
+            if bot_mode:
+                pot_bb = _prompt_float(
+                    "[bold]Current pot[/bold] (BB)", default="3.0", min_val=0.0
+                )
+                if pot_bb is None:
+                    return
+                to_call_bb = _prompt_float(
+                    "[bold]To call[/bold] (BB)", default="0.0", min_val=0.0
+                )
+                if to_call_bb is None:
+                    return
+
+                street_map = {0: "preflop", 1: "flop", 2: "turn", 3: "river"}
+                bot_cfg = BotConfig(
+                    aggression=config.bot.aggression,
+                    bluff_frequency=config.bot.bluff_frequency,
+                    tightness=config.bot.tightness,
+                    raise_sizing=config.bot.raise_sizing,
+                )
+                game_state = GameState(
+                    hole_cards=hero_cards,
+                    community=list(community),
+                    position=position,
+                    num_opponents=opponents,
+                    pot_bb=pot_bb,
+                    to_call_bb=to_call_bb,
+                    street=street_map[street_idx],
+                )
+                decision = Bot(bot_cfg).decide(game_state)
+                _display_bot_decision(decision)
+                console.print()
+
             # At river, show final hand
             if len(community) >= 5:
                 final = Hand(cards=hero_cards + community)
@@ -390,6 +456,86 @@ def interactive(
         console.print(f"[red]Error: {e}[/red]")
     except KeyboardInterrupt:
         console.print("\n[dim]Exiting...[/dim]")
+
+
+@app.command(name="bot")
+def bot_command(
+    hero: str = typer.Argument(..., help="Your hole cards (e.g., 'As Kh')"),
+    position_idx: int = typer.Option(4, "--position", "-P", help="Position (0=UTG .. 5=BTN, 6=SB, 7=BB)"),
+    players: int = typer.Option(6, "--players", "-p", help="Number of players"),
+    board: str | None = typer.Option(None, "--board", "-b", help="Community cards"),
+    pot: float = typer.Option(1.5, "--pot", help="Pot size in BB"),
+    to_call: float = typer.Option(0.0, "--to-call", help="Amount to call in BB"),
+):
+    """Get bot advice for a specific situation."""
+    try:
+        hero_cards = parse_cards(hero)
+        community = parse_cards(board) if board else []
+        pos = Position(position_idx)
+        opponents = players - 1
+
+        # Determine street from board size
+        street_map = {0: "preflop", 3: "flop", 4: "turn", 5: "river"}
+        street = street_map.get(len(community))
+        if street is None:
+            console.print(f"[red]Invalid board: expected 0, 3, 4, or 5 cards, got {len(community)}[/red]")
+            raise typer.Exit(1)
+
+        config = get_config()
+        bot_cfg = BotConfig(
+            aggression=config.bot.aggression,
+            bluff_frequency=config.bot.bluff_frequency,
+            tightness=config.bot.tightness,
+            raise_sizing=config.bot.raise_sizing,
+        )
+        game_state = GameState(
+            hole_cards=hero_cards,
+            community=community,
+            position=pos,
+            num_opponents=opponents,
+            pot_bb=pot,
+            to_call_bb=to_call,
+            street=street,
+        )
+
+        console.print(f"\n[bold]Hand:[/bold]     {format_cards(hero_cards)}")
+        console.print(f"[bold]Position:[/bold] {pos.label}")
+        console.print(f"[bold]Street:[/bold]   {street.capitalize()}")
+        if community:
+            console.print(f"[bold]Board:[/bold]    {format_cards(community)}")
+        console.print(f"[bold]Pot:[/bold]      {pot} BB  |  To call: {to_call} BB")
+        console.print()
+
+        decision = Bot(bot_cfg).decide(game_state)
+        _display_bot_decision(decision)
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def sim(
+    bots: int = typer.Option(7, "--bots", "-b", help="Number of bot opponents (1-7)"),
+    stack: int = typer.Option(1500, "--stack", "-s", help="Starting chip stack"),
+    hands_per_level: int = typer.Option(10, "--level-hands", "-l", help="Hands per blind level"),
+    ai: int = typer.Option(0, "--ai", "-a", help="Number of AI opponents powered by Claude (0-7)"),
+    model: str = typer.Option("opus", "--model", "-m", help="Claude model for AI opponents (opus, sonnet, haiku)"),
+    debug: bool = typer.Option(False, "--debug", "-d", help="Show AI prompt/response debug info"),
+):
+    """Play a Texas Hold'em tournament against bots."""
+    from .sim_display import run_tournament_cli
+
+    bots = max(1, min(7, bots))
+    ai = max(0, min(ai, bots))
+    run_tournament_cli(
+        num_bots=bots,
+        starting_stack=stack,
+        hands_per_level=hands_per_level,
+        ai_opponents=ai,
+        ai_model=model,
+        debug=debug,
+    )
 
 
 def main():

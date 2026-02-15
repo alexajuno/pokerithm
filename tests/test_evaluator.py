@@ -16,7 +16,9 @@ class TestEvaluateGame:
         result = evaluate_game(players, community)
 
         assert not result.is_tie
+        assert result.winner is not None
         assert result.winner.player_id == "Alice"
+        assert result.winner.hand_value is not None
         assert result.winner.hand_value.rank == HandRank.ONE_PAIR
 
     def test_tie_game(self):
@@ -42,7 +44,9 @@ class TestEvaluateGame:
 
         result = evaluate_game(players, community)
 
+        assert result.winner is not None
         assert result.winner.player_id == "Alice"
+        assert result.winner.hand_value is not None
         assert result.winner.hand_value.rank == HandRank.FLUSH
 
     def test_kicker_decides(self):
@@ -55,6 +59,7 @@ class TestEvaluateGame:
         result = evaluate_game(players, community)
 
         # Both have three aces, but Alice has K kicker
+        assert result.winner is not None
         assert result.winner.player_id == "Alice"
 
     def test_all_hands_ranked(self):

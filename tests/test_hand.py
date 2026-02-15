@@ -1,8 +1,7 @@
 """Tests for hand evaluation."""
 
-import pytest
 from pokerithm.card import card
-from pokerithm.hand import Hand, HandRank, HandValue
+from pokerithm.hand import Hand, HandRank
 
 
 class TestHandRanking:
