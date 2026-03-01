@@ -515,6 +515,97 @@ def bot_command(
 
 
 @app.command()
+def decide(
+    hand: str = typer.Argument(..., help="Your hole cards (e.g., 'AKs', 'K7o', 'JJ')"),
+    stack: float = typer.Option(..., "--stack", "-s", help="Stack size in big blinds"),
+    position: str = typer.Option(..., "--position", "-p", help="Position (utg, mp, co, btn, sb, bb)"),
+    players: int = typer.Option(..., "--players", "-n", help="Players remaining at table"),
+    villain: str = typer.Option("tight", "--villain", "-v", help="Villain style: tight, normal, loose"),
+    pot: float = typer.Option(1.5, "--pot", help="Current pot in BBs"),
+):
+    """Get EV-based decision: shove, raise, or fold.
+
+    Uses Nash push/fold ranges for short stacks (<=10bb) and full EV
+    calculation for medium stacks (10-25bb). Adjusts for villain tendencies.
+
+    Examples:
+        pokerithm decide AKs -s 8 -p btn -n 3
+        pokerithm decide K7o -s 6 -p utg -n 4 -v tight
+        pokerithm decide JJ -s 18 -p co -n 4
+    """
+    from .decision import decide as ev_decide, Situation
+
+    try:
+        situation = Situation(
+            hand=hand,
+            stack_bb=stack,
+            position=position,
+            players=players,
+            pot_bb=pot,
+            villain_style=villain,
+        )
+        result = ev_decide(situation)
+
+        # Action color
+        action_color = {"SHOVE": "bold green", "RAISE": "green", "FOLD": "red"}[result.action]
+        action_display = result.action
+        if result.action == "RAISE" and result.raise_size:
+            action_display = f"RAISE {result.raise_size}x"
+
+        # Build EV breakdown lines
+        ev_lines = []
+        ev_lines.append(f"Fold equity: {result.fold_equity:.0%} → +{result.fold_equity * situation.pot_bb:.2f} BB")
+        ev_lines.append(f"Equity when called: {result.equity_called:.0f}%")
+
+        villain_range = {"tight": "~8%", "normal": "~15%", "loose": "~25%"}
+        ev_lines.append(f"Called by: {villain_range.get(villain, '~15%')} of hands ({villain} villain)")
+
+        ev_called = (1 - result.fold_equity) * (result.equity_called / 100 * (pot + 2 * stack) - stack)
+        ev_lines.append(f"EV when called: {ev_called:+.2f} BB")
+
+        # Build panel content
+        content_parts = [
+            f"Hand: [bold]{hand.upper()}[/bold]  |  Position: [bold]{position.upper()}[/bold]  |  Stack: [bold]{stack:.0f} BB[/bold]  |  {players} players",
+            "",
+            f"[{action_color}]{action_display}[/{action_color}]  (EV: {result.ev_shove:+.2f} BB)",
+            "",
+            "[dim]EV Breakdown:[/dim]",
+        ]
+        for line in ev_lines:
+            content_parts.append(f"  {line}")
+
+        content_parts.append("")
+
+        # Show all options for medium stacks
+        if result.ev_raise is not None:
+            best = max(result.ev_shove, result.ev_raise, 0.0)
+            options = [
+                (f"RAISE {result.raise_size}x", result.ev_raise),
+                ("SHOVE", result.ev_shove),
+                ("FOLD", 0.0),
+            ]
+            options.sort(key=lambda x: x[1], reverse=True)
+            content_parts.append("[dim]All Options:[/dim]")
+            for name, ev in options:
+                marker = "→" if ev == best else " "
+                color = "green" if ev == best else ("yellow" if ev > 0 else "red")
+                content_parts.append(f"  {marker} [{color}]{name:12s} EV: {ev:+.2f} BB[/{color}]")
+            content_parts.append("")
+
+        content_parts.append(f"Confidence: [bold]{result.confidence.upper()}[/bold]")
+
+        console.print(Panel(
+            "\n".join(content_parts),
+            title="[bold cyan]Decision[/bold cyan]",
+            expand=False,
+        ))
+
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def sim(
     bots: int = typer.Option(7, "--bots", "-b", help="Number of bot opponents (1-7)"),
     stack: int = typer.Option(1500, "--stack", "-s", help="Starting chip stack"),
