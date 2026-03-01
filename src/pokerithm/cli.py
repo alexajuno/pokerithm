@@ -13,6 +13,7 @@ from .calculator import calculate_equity, calculate_outs, preflop_equity
 from .config import get_config
 from .hand import Hand, HandRank
 from .position import Position, position_from_utg_distance
+from .ranges import hole_cards_to_key
 
 app = typer.Typer(help="Poker odds calculator for Texas Hold'em")
 console = Console()
@@ -413,6 +414,41 @@ def interactive(
                 f"Equity vs {opponents}: [green]{equity_result.win_percent:.1f}%[/green] win, "
                 f"[yellow]{equity_result.tie_rate * 100:.1f}%[/yellow] tie\n"
             )
+
+            # Decision advice (preflop only)
+            if street_idx == 0:
+                stack_bb = _prompt_float(
+                    "[bold]Your stack[/bold] (BB)", min_val=0.1
+                )
+                if stack_bb is None:
+                    return
+                villain_style = Prompt.ask(
+                    "[bold]Opponent style[/bold]",
+                    choices=["tight", "normal", "loose"],
+                    default="tight",
+                )
+
+                from .decision import decide as ev_decide, Situation
+
+                key = hole_cards_to_key(hero_cards[0], hero_cards[1])
+                situation = Situation(
+                    hand=key,
+                    stack_bb=stack_bb,
+                    position=position.short.lower().replace("+1", "_1"),
+                    players=opponents + 1,
+                    pot_bb=1.5,
+                    villain_style=villain_style,
+                )
+                dec = ev_decide(situation)
+                action_color = {"SHOVE": "bold green", "RAISE": "green", "FOLD": "red"}[dec.action]
+                action_text = dec.action
+                if dec.action == "RAISE" and dec.raise_size:
+                    action_text = f"RAISE {dec.raise_size}x"
+                console.print(
+                    f"[{action_color}]Decision: {action_text}[/{action_color}] "
+                    f"(EV: {dec.ev_shove:+.2f} BB) — "
+                    f"{dec.reasoning}\n"
+                )
 
             # Bot advice
             if bot_mode:
